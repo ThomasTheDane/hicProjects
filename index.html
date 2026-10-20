@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob: data:; img-src 'self' blob: data:; script-src 'self'; connect-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self';"
+  />
+  <title>HTML-in-Canvas — 30s Interactive Motion Graphics Ad &amp; Video Capture</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Studio Editorial Masthead -->
+  <header class="studio-header">
+    <div class="brand-group">
+      <div class="brand-orb" aria-hidden="true">HiC</div>
+      <div class="brand-copy">
+        <div class="brand-kicker">ISSUE N&deg; 04 &bull; MOTION PRESS &amp; BROADCAST DESK</div>
+        <div class="brand-title">HTML-in-Canvas Editorial Motion Studio</div>
+        <div class="brand-subtitle">30s Voiced Showcase &bull; Live DOM-in-Canvas Typesetting &bull; One-Click Video Capture</div>
+      </div>
+    </div>
+
+    <div class="api-badge-row">
+      <div class="edition-stamp" aria-hidden="true">1920&times;1080 &bull; 60 FPS</div>
+      <div class="status-pill" id="api-mode-pill">
+        <span class="status-dot" id="api-status-dot"></span>
+        <span id="api-mode-text">Checking HTML-in-Canvas API...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Studio Workspace -->
+  <main class="studio-workspace">
+    <!-- Left Column: 16:9 Canvas Stage + Transport -->
+    <section class="stage-column">
+      <div class="stage-paper-mount">
+        <div class="stage-folio-bar">
+          <span class="folio-label">FIG. 01 &mdash; LIVE &lt;canvas layoutsubtree&gt; BROADCAST PLATE</span>
+          <span class="folio-marks">REG &bull; CMYK / sRGB COMPOSITE</span>
+        </div>
+        <div class="canvas-viewport">
+          <!--
+            HTML-in-Canvas (<canvas layoutsubtree>):
+            Direct children of this canvas participate in browser CSS layout
+            and are rasterized into the canvas via ctx.drawElementImage(el)
+            on the 'paint' event (with automatic high-DPI composite fallback).
+          -->
+          <canvas id="ad-canvas" width="1920" height="1080" layoutsubtree>
+            <div id="hic-hero-card" class="hic-dom-card">
+              <span id="hic-card-badge" class="hic-badge">LIVE &lt;canvas layoutsubtree&gt; DOM NODE</span>
+              <h2 id="hic-card-heading" class="hic-heading">Design with CSS. Render with Shaders.</h2>
+              <p id="hic-card-body" class="hic-body">
+                Real browser Flexbox, variable typography, and live user controls rendered directly into 60fps Canvas pixels.
+              </p>
+            </div>
+          </canvas>
+        </div>
+      </div>
+
+      <!-- Transport & Timeline Controls -->
+      <div class="transport-bar">
+        <div class="transport-top">
+          <div class="transport-buttons">
+            <button type="button" id="btn-play-pause" class="btn btn-primary">
+              <span id="play-icon">&#9654;</span>
+              <span id="play-label">Play 30s Commercial (with Voiceover)</span>
+            </button>
+            <button type="button" id="btn-restart" class="btn">
+              &#8634; Restart
+            </button>
+            <button type="button" id="btn-mute" class="btn">
+              &#128266; Voice &amp; SFX: ON
+            </button>
+          </div>
+
+          <div class="transport-buttons">
+            <div class="time-readout" id="time-readout">00.0s / 30.0s &bull; 60 FPS</div>
+            <button type="button" id="btn-capture" class="btn btn-capture">
+              &#9679; Capture &amp; Download Video (30s)
+            </button>
+          </div>
+        </div>
+
+        <div class="timeline-track-wrap">
+          <input
+            type="range"
+            id="timeline-scrubber"
+            class="scrubber-input"
+            min="0"
+            max="30"
+            step="0.02"
+            value="0"
+            aria-label="Timeline scrubber in seconds"
+          />
+          <div class="scene-pills" id="scene-pills-container">
+            <button type="button" class="scene-jump-btn active" data-scene-start="0">
+              <span class="scene-jump-num">01 &bull; 0:00</span>
+              <span class="scene-jump-name">The Dilemma</span>
+            </button>
+            <button type="button" class="scene-jump-btn" data-scene-start="5.05">
+              <span class="scene-jump-num">02 &bull; 0:05</span>
+              <span class="scene-jump-name">layoutsubtree</span>
+            </button>
+            <button type="button" class="scene-jump-btn" data-scene-start="10.25">
+              <span class="scene-jump-num">03 &bull; 0:10</span>
+              <span class="scene-jump-name">3D &amp; Shaders</span>
+            </button>
+            <button type="button" class="scene-jump-btn" data-scene-start="15.65">
+              <span class="scene-jump-num">04 &bull; 0:15</span>
+              <span class="scene-jump-name">A11y &amp; Selectable</span>
+            </button>
+            <button type="button" class="scene-jump-btn" data-scene-start="20.85">
+              <span class="scene-jump-num">05 &bull; 0:20</span>
+              <span class="scene-jump-name">Live Controls</span>
+            </button>
+            <button type="button" class="scene-jump-btn" data-scene-start="25.65">
+              <span class="scene-jump-num">06 &bull; 0:25</span>
+              <span class="scene-jump-name">1-Click Capture</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Live Dynamic Customization Controls -->
+    <aside class="controls-panel">
+      <div class="panel-header">
+        <div class="panel-kicker">SPEC SHEET &bull; REAL-TIME DOM REFLOW</div>
+        <div class="panel-title">
+          <span>Live Typesetting &amp; Rig</span>
+        </div>
+        <p class="panel-desc">
+          Adjust these parameters while playing or before hitting <strong>Capture</strong>. Changes immediately reflow the live DOM inside the canvas and bake into your exported video.
+        </p>
+      </div>
+
+      <!-- Toast Notification Banner -->
+      <div id="status-toast" class="toast-banner" role="status" aria-live="polite">
+        <span id="status-toast-text">Ready to play or capture.</span>
+      </div>
+
+      <!-- Control 1: Dynamic Typography Scale -->
+      <div class="control-group">
+        <div class="control-label-row">
+          <label for="input-text-scale">Typography Scale (Live Reflow)</label>
+          <span class="control-value-badge" id="badge-text-scale">100%</span>
+        </div>
+        <input
+          type="range"
+          id="input-text-scale"
+          class="control-slider"
+          min="0.75"
+          max="1.40"
+          step="0.05"
+          value="1.00"
+        />
+      </div>
+
+      <!-- Control 2: Custom Headline Text -->
+      <div class="control-group">
+        <div class="control-label-row">
+          <label for="input-custom-headline">Custom Hero Headline</label>
+          <span class="control-value-badge">Live Copy</span>
+        </div>
+        <input
+          type="text"
+          id="input-custom-headline"
+          class="control-text-input"
+          maxlength="44"
+          value="Design with CSS. Render with Shaders."
+          placeholder="Enter custom headline..."
+        />
+      </div>
+
+      <!-- Control 3: Shader & 3D FX Intensity -->
+      <div class="control-group">
+        <div class="control-label-row">
+          <label for="input-fx-intensity">Shader &amp; 3D Tilt Intensity</label>
+          <span class="control-value-badge" id="badge-fx-intensity">100%</span>
+        </div>
+        <input
+          type="range"
+          id="input-fx-intensity"
+          class="control-slider"
+          min="0"
+          max="1.8"
+          step="0.1"
+          value="1.0"
+        />
+      </div>
+
+      <!-- Control 4: Capture Duration Mode -->
+      <div class="control-group">
+        <div class="control-label-row">
+          <label for="input-capture-duration">Capture Duration</label>
+          <span class="control-value-badge" id="badge-capture-duration">Full 30s</span>
+        </div>
+        <input
+          type="range"
+          id="input-capture-duration"
+          class="control-slider"
+          min="5"
+          max="30"
+          step="5"
+          value="30"
+        />
+      </div>
+
+      <!-- Control 5: Visual Theme Palette -->
+      <div class="control-group">
+        <div class="control-label-row">
+          <span>Color Palette Theme</span>
+          <span class="control-value-badge" id="badge-theme-name">Vox Editorial</span>
+        </div>
+        <div class="theme-grid" id="theme-grid">
+          <button type="button" class="theme-btn active" data-theme="editorial">
+            <span class="theme-swatch swatch-editorial"></span>
+            <span>Vox Editorial</span>
+          </button>
+          <button type="button" class="theme-btn" data-theme="cyber">
+            <span class="theme-swatch swatch-cyber"></span>
+            <span>Cyber Neon</span>
+          </button>
+          <button type="button" class="theme-btn" data-theme="emerald">
+            <span class="theme-swatch swatch-emerald"></span>
+            <span>Emerald Matrix</span>
+          </button>
+          <button type="button" class="theme-btn" data-theme="solar">
+            <span class="theme-swatch swatch-solar"></span>
+            <span>Solar Flare</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Live Voiceover Script Monitor -->
+      <div class="script-box">
+        <div class="script-scene-tag" id="script-scene-tag">01 / THE OLD DILEMMA</div>
+        <div class="script-caption-text" id="script-caption-text">
+          Web creators faced a choice: rich CSS layouts, or raw Canvas pixel power.
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="assets/voiceover_data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

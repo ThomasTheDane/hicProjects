@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "start": 0.12,
+    "window_end": 5.05,
+    "title": "01 / THE OLD DILEMMA",
+    "speech": "Web creators always had to choose: rich CSS, or raw Canvas power.",
+    "caption": "Web creators always had to choose: rich CSS, or raw Canvas power.",
+    "duration": 4.711,
+    "end": 4.831
+  },
+  {
+    "id": 2,
+    "start": 5.12,
+    "window_end": 10.45,
+    "title": "02 / ENTER HTML-IN-CANVAS",
+    "speech": "Meet HTML in Canvas. One attribute unlocks live DOM inside your canvas.",
+    "caption": "Meet HTML-in-Canvas. One attribute\u2014layoutsubtree\u2014unlocks live DOM inside your canvas.",
+    "duration": 5.205,
+    "end": 10.325
+  },
+  {
+    "id": 3,
+    "start": 10.5,
+    "window_end": 15.75,
+    "title": "03 / 3D & PIXEL SHADERS",
+    "speech": "Bend Flexbox cards in 3D, run shaders, and burst text into particles.",
+    "caption": "Bend Flexbox cards in 3D, run shaders, and burst text into particles.",
+    "duration": 5.142,
+    "end": 15.642
+  },
+  {
+    "id": 4,
+    "start": 15.82,
+    "window_end": 20.25,
+    "title": "04 / ACCESSIBLE, SELECTABLE & INTERACTIVE",
+    "speech": "Content stays accessible to screen readers, selectable, and interactive.",
+    "caption": "Content stays accessible to screen readers, selectable, and interactive.",
+    "duration": 4.038,
+    "end": 19.858
+  },
+  {
+    "id": 5,
+    "start": 20.3,
+    "window_end": 25.2,
+    "title": "05 / DYNAMIC & REACTIVE",
+    "speech": "Everything stays live. Tweak text size, headlines, or themes on the fly.",
+    "caption": "Everything stays live. Tweak text size, headlines, or themes on the fly.",
+    "duration": 4.793,
+    "end": 25.093
+  },
+  {
+    "id": 6,
+    "start": 25.22,
+    "window_end": 30.0,
+    "title": "06 / CAPTURE IN ONE CLICK",
+    "speech": "HTML in Canvas. Design with the DOM, and capture video in one click.",
+    "caption": "HTML-in-Canvas. Design with the DOM, and capture video in one click.",
+    "duration": 4.711,
+    "end": 29.931
+  }
+]
