@@ -130,6 +130,7 @@
     isPlaying: false,
     isMuted: false,
     isRecording: false,
+    isInstantRendering: false,
     currentTime: 0.0,
     lastFramePerf: 0,
     nativeHicSupported: false
@@ -137,7 +138,8 @@
 
   // DOM References
   const canvas = document.getElementById('ad-canvas');
-  const ctx = canvas.getContext('2d');
+  const mainCtx = canvas.getContext('2d');
+  let ctx = mainCtx;
   const hicHeroCard = document.getElementById('hic-hero-card');
   const hicCardHeading = document.getElementById('hic-card-heading');
 
@@ -149,6 +151,7 @@
   const btnRestart = document.getElementById('btn-restart');
   const btnMute = document.getElementById('btn-mute');
   const btnCapture = document.getElementById('btn-capture');
+  const btnInstantCapture = document.getElementById('btn-instant-capture');
   const timeReadout = document.getElementById('time-readout');
   const scrubber = document.getElementById('timeline-scrubber');
   const scenePillsContainer = document.getElementById('scene-pills-container');
@@ -1649,7 +1652,7 @@
     return SCENES[SCENES.length - 1];
   }
 
-  function renderFrame(t) {
+  function renderSceneToCanvas(t) {
     const theme = THEMES[state.themeKey] || THEMES.editorial;
     const activeScene = getSceneForTime(t);
 
@@ -1670,6 +1673,11 @@
     }
 
     renderBroadcastOverlay(t, theme, activeScene);
+    return activeScene;
+  }
+
+  function renderFrame(t) {
+    const activeScene = renderSceneToCanvas(t);
     updateUiTelemetry(t, activeScene);
   }
 
@@ -1831,6 +1839,580 @@
     }
   }
 
+  // ── Instant Non-Realtime Capture via Offscreen HTML-in-Canvas + WebCodecs + OfflineAudioContext ──
+  function u32be(v) {
+    return new Uint8Array([(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255]);
+  }
+
+  function u16be(v) {
+    return new Uint8Array([(v >>> 8) & 255, v & 255]);
+  }
+
+  function asciiBytes(str) {
+    const out = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) {
+      out[i] = str.charCodeAt(i) & 0xff;
+    }
+    return out;
+  }
+
+  function concatUint8(arrays) {
+    let total = 0;
+    for (let i = 0; i < arrays.length; i++) {
+      total += arrays[i].byteLength;
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (let i = 0; i < arrays.length; i++) {
+      out.set(arrays[i], offset);
+      offset += arrays[i].byteLength;
+    }
+    return out;
+  }
+
+  function mp4Box(type, children) {
+    const body = children && children.length ? concatUint8(children) : new Uint8Array(0);
+    return concatUint8([u32be(8 + body.byteLength), asciiBytes(type), body]);
+  }
+
+  function mp4FullBox(type, version, flags, children) {
+    const vf = ((version & 0xff) << 24) | (flags & 0xffffff);
+    const body = children && children.length ? concatUint8(children) : new Uint8Array(0);
+    return mp4Box(type, [u32be(vf), body]);
+  }
+
+  async function renderOfflineAudioTrack(durationSec, sampleRate) {
+    await ensureAudioInitialized();
+    const totalFrames = Math.ceil(durationSec * sampleRate);
+    const OfflineCtxClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!OfflineCtxClass) return null;
+
+    const offlineCtx = new OfflineCtxClass(2, totalFrames, sampleRate);
+    if (!state.isMuted) {
+      if (voiceoverBuffer) {
+        const src = offlineCtx.createBufferSource();
+        src.buffer = voiceoverBuffer;
+        src.connect(offlineCtx.destination);
+        src.start(0);
+      }
+
+      const freqs = [220, 277.18, 329.63, 392.0, 440.0, 523.25];
+      for (let i = 0; i < SCENES.length; i++) {
+        const sc = SCENES[i];
+        if (sc.start >= durationSec) break;
+        const baseFreq = freqs[(sc.id - 1) % freqs.length];
+        const osc = offlineCtx.createOscillator();
+        const gain = offlineCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(baseFreq * 0.5, sc.start);
+        osc.frequency.exponentialRampToValueAtTime(baseFreq, sc.start + 0.18);
+        gain.gain.setValueAtTime(0.001, sc.start);
+        gain.gain.linearRampToValueAtTime(0.06, sc.start + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.0008, sc.start + 0.65);
+        osc.connect(gain);
+        gain.connect(offlineCtx.destination);
+        osc.start(sc.start);
+        osc.stop(Math.min(durationSec, sc.start + 0.68));
+      }
+    }
+    return offlineCtx.startRendering();
+  }
+
+  function muxMp4VideoAndAudio(opts) {
+    const width = opts.width;
+    const height = opts.height;
+    const fps = opts.fps;
+    const durationSec = opts.durationSec;
+    const videoChunks = opts.videoChunks;
+    const avcDescription = opts.avcDescription;
+    const audioChunks = opts.audioChunks || [];
+    const audioSampleRate = opts.audioSampleRate || 48000;
+    const audioDescription = opts.audioDescription;
+
+    const ftyp = mp4Box('ftyp', [
+      asciiBytes('isom'),
+      u32be(512),
+      asciiBytes('isomiso2avc1mp41')
+    ]);
+
+    const mdatHeaderSize = 8;
+    const videoStartOffset = ftyp.byteLength + mdatHeaderSize;
+
+    const videoOffsets = [];
+    const videoSizes = [];
+    const syncSamples = [];
+    const mdatParts = [];
+    let runningOffset = videoStartOffset;
+
+    for (let i = 0; i < videoChunks.length; i++) {
+      const vc = videoChunks[i];
+      videoOffsets.push(runningOffset);
+      videoSizes.push(vc.data.byteLength);
+      if (vc.isKey) {
+        syncSamples.push(i + 1);
+      }
+      mdatParts.push(vc.data);
+      runningOffset += vc.data.byteLength;
+    }
+
+    const audioOffsets = [];
+    const audioSizes = [];
+    for (let i = 0; i < audioChunks.length; i++) {
+      const ac = audioChunks[i];
+      audioOffsets.push(runningOffset);
+      audioSizes.push(ac.data.byteLength);
+      mdatParts.push(ac.data);
+      runningOffset += ac.data.byteLength;
+    }
+
+    const mdat = mp4Box('mdat', mdatParts);
+
+    const movieTimescale = 1000;
+    const movieDuration = Math.round(durationSec * movieTimescale);
+    const identityMatrix = concatUint8([
+      u32be(0x00010000), u32be(0), u32be(0),
+      u32be(0), u32be(0x00010000), u32be(0),
+      u32be(0), u32be(0), u32be(0x40000000)
+    ]);
+
+    const mvhd = mp4FullBox('mvhd', 0, 0, [
+      u32be(0),
+      u32be(0),
+      u32be(movieTimescale),
+      u32be(movieDuration),
+      u32be(0x00010000),
+      u16be(0x0100),
+      new Uint8Array(10),
+      identityMatrix,
+      new Uint8Array(24),
+      u32be(audioChunks.length > 0 ? 3 : 2)
+    ]);
+
+    // Video Track (track_ID = 1)
+    const videoTimescale = fps * 1000;
+    const sampleDelta = 1000;
+    const videoTrackDuration = videoChunks.length * sampleDelta;
+
+    const videoTkhd = mp4FullBox('tkhd', 0, 3, [
+      u32be(0),
+      u32be(0),
+      u32be(1),
+      u32be(0),
+      u32be(movieDuration),
+      new Uint8Array(8),
+      u16be(0),
+      u16be(0),
+      u16be(0),
+      u16be(0),
+      identityMatrix,
+      u32be((width << 16) >>> 0),
+      u32be((height << 16) >>> 0)
+    ]);
+
+    const videoMdhd = mp4FullBox('mdhd', 0, 0, [
+      u32be(0),
+      u32be(0),
+      u32be(videoTimescale),
+      u32be(videoTrackDuration),
+      u16be(0x55c4),
+      u16be(0)
+    ]);
+
+    const videoHdlr = mp4FullBox('hdlr', 0, 0, [
+      u32be(0),
+      asciiBytes('vide'),
+      new Uint8Array(12),
+      asciiBytes('VideoHandler\0')
+    ]);
+
+    const vmhd = mp4FullBox('vmhd', 0, 1, [u16be(0), new Uint8Array(6)]);
+    const dref = mp4FullBox('dref', 0, 0, [
+      u32be(1),
+      mp4FullBox('url ', 0, 1, [])
+    ]);
+    const dinf = mp4Box('dinf', [dref]);
+
+    const avcCBox = mp4Box('avcC', [avcDescription]);
+    const avc1Box = mp4Box('avc1', [
+      new Uint8Array(6),
+      u16be(1),
+      new Uint8Array(16),
+      u16be(width),
+      u16be(height),
+      u32be(0x00480000),
+      u32be(0x00480000),
+      u32be(0),
+      u16be(1),
+      new Uint8Array(32),
+      u16be(0x0018),
+      u16be(0xffff),
+      avcCBox
+    ]);
+    const videoStsd = mp4FullBox('stsd', 0, 0, [u32be(1), avc1Box]);
+    const videoStts = mp4FullBox('stts', 0, 0, [
+      u32be(1),
+      u32be(videoChunks.length),
+      u32be(sampleDelta)
+    ]);
+    const stssEntries = [u32be(syncSamples.length)];
+    for (let i = 0; i < syncSamples.length; i++) {
+      stssEntries.push(u32be(syncSamples[i]));
+    }
+    const videoStss = mp4FullBox('stss', 0, 0, stssEntries);
+    const videoStsc = mp4FullBox('stsc', 0, 0, [
+      u32be(1),
+      u32be(1),
+      u32be(1),
+      u32be(1)
+    ]);
+    const stszEntries = [u32be(0), u32be(videoSizes.length)];
+    for (let i = 0; i < videoSizes.length; i++) {
+      stszEntries.push(u32be(videoSizes[i]));
+    }
+    const videoStsz = mp4FullBox('stsz', 0, 0, stszEntries);
+    const stcoEntries = [u32be(videoOffsets.length)];
+    for (let i = 0; i < videoOffsets.length; i++) {
+      stcoEntries.push(u32be(videoOffsets[i]));
+    }
+    const videoStco = mp4FullBox('stco', 0, 0, stcoEntries);
+
+    const videoStbl = mp4Box('stbl', [
+      videoStsd,
+      videoStts,
+      videoStss,
+      videoStsc,
+      videoStsz,
+      videoStco
+    ]);
+    const videoMinf = mp4Box('minf', [vmhd, dinf, videoStbl]);
+    const videoMdia = mp4Box('mdia', [videoMdhd, videoHdlr, videoMinf]);
+    const videoTrak = mp4Box('trak', [videoTkhd, videoMdia]);
+
+    const moovChildren = [mvhd, videoTrak];
+
+    // Optional Audio Track (track_ID = 2)
+    if (audioChunks.length > 0) {
+      const audioTkhd = mp4FullBox('tkhd', 0, 3, [
+        u32be(0),
+        u32be(0),
+        u32be(2),
+        u32be(0),
+        u32be(movieDuration),
+        new Uint8Array(8),
+        u16be(0),
+        u16be(0),
+        u16be(0x0100),
+        u16be(0),
+        identityMatrix,
+        u32be(0),
+        u32be(0)
+      ]);
+
+      const audioTrackDuration = audioChunks.length * 1024;
+      const audioMdhd = mp4FullBox('mdhd', 0, 0, [
+        u32be(0),
+        u32be(0),
+        u32be(audioSampleRate),
+        u32be(audioTrackDuration),
+        u16be(0x55c4),
+        u16be(0)
+      ]);
+
+      const audioHdlr = mp4FullBox('hdlr', 0, 0, [
+        u32be(0),
+        asciiBytes('soun'),
+        new Uint8Array(12),
+        asciiBytes('SoundHandler\0')
+      ]);
+
+      const smhd = mp4FullBox('smhd', 0, 0, [u16be(0), u16be(0)]);
+      const audioDinf = mp4Box('dinf', [dref]);
+
+      const asc =
+        audioDescription && audioDescription.byteLength > 0
+          ? audioDescription
+          : new Uint8Array([0x11, 0x90]);
+
+      const esdsPayload = concatUint8([
+        new Uint8Array([0x03, 23 + asc.byteLength, 0x00, 0x02, 0x00]),
+        new Uint8Array([0x04, 15 + asc.byteLength, 0x40, 0x15, 0x00, 0x00, 0x00]),
+        u32be(128000),
+        u32be(128000),
+        new Uint8Array([0x05, asc.byteLength]),
+        asc,
+        new Uint8Array([0x06, 0x01, 0x02])
+      ]);
+      const esdsBox = mp4FullBox('esds', 0, 0, [esdsPayload]);
+
+      const mp4aBox = mp4Box('mp4a', [
+        new Uint8Array(6),
+        u16be(1),
+        new Uint8Array(8),
+        u16be(2),
+        u16be(16),
+        u16be(0),
+        u16be(0),
+        u32be((audioSampleRate << 16) >>> 0),
+        esdsBox
+      ]);
+
+      const audioStsd = mp4FullBox('stsd', 0, 0, [u32be(1), mp4aBox]);
+      const audioStts = mp4FullBox('stts', 0, 0, [
+        u32be(1),
+        u32be(audioChunks.length),
+        u32be(1024)
+      ]);
+      const audioStsc = mp4FullBox('stsc', 0, 0, [
+        u32be(1),
+        u32be(1),
+        u32be(1),
+        u32be(1)
+      ]);
+      const aStszEntries = [u32be(0), u32be(audioSizes.length)];
+      for (let i = 0; i < audioSizes.length; i++) {
+        aStszEntries.push(u32be(audioSizes[i]));
+      }
+      const audioStsz = mp4FullBox('stsz', 0, 0, aStszEntries);
+      const aStcoEntries = [u32be(audioOffsets.length)];
+      for (let i = 0; i < audioOffsets.length; i++) {
+        aStcoEntries.push(u32be(audioOffsets[i]));
+      }
+      const audioStco = mp4FullBox('stco', 0, 0, aStcoEntries);
+
+      const audioStbl = mp4Box('stbl', [
+        audioStsd,
+        audioStts,
+        audioStsc,
+        audioStsz,
+        audioStco
+      ]);
+      const audioMinf = mp4Box('minf', [smhd, audioDinf, audioStbl]);
+      const audioMdia = mp4Box('mdia', [audioMdhd, audioHdlr, audioMinf]);
+      const audioTrak = mp4Box('trak', [audioTkhd, audioMdia]);
+      moovChildren.push(audioTrak);
+    }
+
+    const moov = mp4Box('moov', moovChildren);
+    return new Blob([ftyp, mdat, moov], { type: 'video/mp4' });
+  }
+
+  async function findSupportedAvcConfig(width, height, fps) {
+    const codecs = [
+      'avc1.64002a',
+      'avc1.4d002a',
+      'avc1.42002a',
+      'avc1.4d0028',
+      'avc1.420028'
+    ];
+    for (let i = 0; i < codecs.length; i++) {
+      const cfg = {
+        codec: codecs[i],
+        width: width,
+        height: height,
+        bitrate: 10000000,
+        framerate: fps,
+        latencyMode: 'realtime',
+        avc: { format: 'avc' }
+      };
+      try {
+        const res = await VideoEncoder.isConfigSupported(cfg);
+        if (res && res.supported) {
+          return cfg;
+        }
+      } catch (_e) {
+        // Try next profile
+      }
+    }
+    return null;
+  }
+
+  async function startInstantVideoCapture() {
+    if (state.isInstantRendering || state.isRecording) return;
+
+    if (typeof VideoEncoder === 'undefined' || typeof VideoFrame === 'undefined') {
+      showToast('WebCodecs VideoEncoder is not available in this browser for instant offline export.', true);
+      return;
+    }
+
+    const durationSec = state.captureDuration;
+    const fps = 30;
+    const totalFrames = Math.round(durationSec * fps);
+
+    const videoConfig = await findSupportedAvcConfig(DESIGN_W, DESIGN_H, fps);
+    if (!videoConfig) {
+      showToast('Hardware H.264 WebCodecs encoder unavailable; use real-time Capture instead.', true);
+      return;
+    }
+
+    state.isInstantRendering = true;
+    btnInstantCapture.disabled = true;
+    btnCapture.disabled = true;
+    btnInstantCapture.classList.add('is-rendering');
+    btnInstantCapture.textContent = '⚡ Rendering 0%...';
+    showToast(`Rendering & encoding ${durationSec}s clip offscreen (no playback required)...`, false);
+
+    try {
+      syncDomSubtreeCard();
+
+      // 1. Render full audio mix offline in milliseconds via OfflineAudioContext
+      const audioSampleRate = 48000;
+      const renderedAudioBuffer = await renderOfflineAudioTrack(durationSec, audioSampleRate);
+
+      // 2. Encode AAC audio offline if supported and not muted
+      const audioChunks = [];
+      let audioDescription = null;
+      if (renderedAudioBuffer && !state.isMuted && typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined') {
+        const aacConfig = {
+          codec: 'mp4a.40.2',
+          sampleRate: audioSampleRate,
+          numberOfChannels: 2,
+          bitrate: 128000
+        };
+        let aacSupported = false;
+        try {
+          const sup = await AudioEncoder.isConfigSupported(aacConfig);
+          aacSupported = Boolean(sup && sup.supported);
+        } catch (_e) {
+          aacSupported = false;
+        }
+
+        if (aacSupported) {
+          const audioEncoder = new AudioEncoder({
+            output: function (chunk, meta) {
+              if (meta && meta.decoderConfig && meta.decoderConfig.description && !audioDescription) {
+                audioDescription = new Uint8Array(meta.decoderConfig.description);
+              }
+              const buf = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(buf);
+              audioChunks.push({ data: buf, timestamp: chunk.timestamp });
+            },
+            error: function () {}
+          });
+          audioEncoder.configure(aacConfig);
+
+          const ch0 = renderedAudioBuffer.getChannelData(0);
+          const ch1 = renderedAudioBuffer.getChannelData(1);
+          const packetSize = 1024;
+          for (let offset = 0; offset + packetSize <= renderedAudioBuffer.length; offset += packetSize) {
+            const planar = new Float32Array(packetSize * 2);
+            planar.set(ch0.subarray(offset, offset + packetSize), 0);
+            planar.set(ch1.subarray(offset, offset + packetSize), packetSize);
+            const ad = new AudioData({
+              format: 'f32-planar',
+              sampleRate: audioSampleRate,
+              numberOfFrames: packetSize,
+              numberOfChannels: 2,
+              timestamp: Math.round((offset / audioSampleRate) * 1000000),
+              data: planar
+            });
+            audioEncoder.encode(ad);
+            ad.close();
+          }
+          await audioEncoder.flush();
+          audioEncoder.close();
+        }
+      }
+
+      // 3. Render & encode all video frames on an offscreen canvas without disturbing on-screen state
+      const offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = DESIGN_W;
+      offscreenCanvas.height = DESIGN_H;
+      const offscreenCtx = offscreenCanvas.getContext('2d');
+
+      const videoChunks = [];
+      let avcDescription = null;
+
+      const videoEncoder = new VideoEncoder({
+        output: function (chunk, meta) {
+          if (meta && meta.decoderConfig && meta.decoderConfig.description && !avcDescription) {
+            avcDescription = new Uint8Array(meta.decoderConfig.description);
+          }
+          const buf = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(buf);
+          videoChunks.push({
+            data: buf,
+            isKey: chunk.type === 'key',
+            timestamp: chunk.timestamp
+          });
+        },
+        error: function () {}
+      });
+      videoEncoder.configure(videoConfig);
+
+      const frameDurationUs = Math.round(1000000 / fps);
+
+      for (let frameIdx = 0; frameIdx < totalFrames; frameIdx++) {
+        const t = (frameIdx / fps);
+
+        // Render deterministically onto offscreenCtx while preserving mainCtx on screen
+        ctx = offscreenCtx;
+        renderSceneToCanvas(t);
+        ctx = mainCtx;
+
+        const timestampUs = Math.round((frameIdx / fps) * 1000000);
+        const vFrame = new VideoFrame(offscreenCanvas, {
+          timestamp: timestampUs,
+          duration: frameDurationUs
+        });
+        videoEncoder.encode(vFrame, { keyFrame: frameIdx % fps === 0 });
+        vFrame.close();
+
+        if (frameIdx % 15 === 0) {
+          const pct = Math.round(((frameIdx + 1) / totalFrames) * 100);
+          btnInstantCapture.textContent = `⚡ Rendering ${pct}%...`;
+          while (videoEncoder.encodeQueueSize > 16) {
+            await new Promise((r) => setTimeout(r, 4));
+          }
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+
+      btnInstantCapture.textContent = '⚡ Finalizing MP4...';
+      await videoEncoder.flush();
+      videoEncoder.close();
+
+      if (!avcDescription || videoChunks.length === 0) {
+        throw new Error('No video chunks produced by encoder');
+      }
+
+      const mp4Blob = muxMp4VideoAndAudio({
+        width: DESIGN_W,
+        height: DESIGN_H,
+        fps: fps,
+        durationSec: durationSec,
+        videoChunks: videoChunks,
+        avcDescription: avcDescription,
+        audioChunks: audioChunks,
+        audioSampleRate: audioSampleRate,
+        audioDescription: audioDescription
+      });
+
+      const url = URL.createObjectURL(mp4Blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `html-in-canvas-instant-${durationSec}s.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+      showToast(
+        `Instant export complete: html-in-canvas-instant-${durationSec}s.mp4 (${(mp4Blob.size / (1024 * 1024)).toFixed(2)} MB)!`,
+        false
+      );
+    } catch (_err) {
+      ctx = mainCtx;
+      showToast('Instant offline export encountered an encoder error; please try Capture & Download.', true);
+    } finally {
+      ctx = mainCtx;
+      state.isInstantRendering = false;
+      btnInstantCapture.disabled = false;
+      btnCapture.disabled = false;
+      btnInstantCapture.classList.remove('is-rendering');
+      btnInstantCapture.textContent = `⚡ Instant Download (${state.captureDuration}s)`;
+    }
+  }
+
   // ── Event Listeners & Strict Input Validation ──────────────────────
   function bindEvents() {
     btnPlayPause.addEventListener('click', function () {
@@ -1856,6 +2438,12 @@
     btnCapture.addEventListener('click', function () {
       startVideoCapture();
     });
+
+    if (btnInstantCapture) {
+      btnInstantCapture.addEventListener('click', function () {
+        startInstantVideoCapture();
+      });
+    }
 
     scrubber.addEventListener('input', function () {
       const val = clamp(parseFloat(scrubber.value) || 0, 0, TOTAL_DURATION);
@@ -1911,6 +2499,9 @@
       badgeCaptureDuration.textContent = dur === 30 ? 'Full 30s' : `First ${dur}s`;
       if (!state.isRecording) {
         btnCapture.textContent = `● Capture & Download Video (${dur}s)`;
+      }
+      if (btnInstantCapture && !state.isInstantRendering) {
+        btnInstantCapture.textContent = `⚡ Instant Download (${dur}s)`;
       }
     });
 

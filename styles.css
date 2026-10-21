@@ -379,6 +379,29 @@ body::before {
   box-shadow: 3px 3px 0 var(--rule-ink);
 }
 
+.btn-instant-capture {
+  background: var(--vox-teal);
+  color: #fffdf9;
+  border-color: var(--rule-ink);
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 3px 3px 0 var(--rule-ink);
+}
+
+.btn-instant-capture:hover:not(:disabled) {
+  background: #21867a;
+  color: #ffffff;
+  transform: translate(1px, 1px);
+  box-shadow: 2px 2px 0 var(--rule-ink);
+}
+
+.btn-instant-capture.is-rendering {
+  background: var(--vox-ochre);
+  color: #fffdf9;
+  box-shadow: 3px 3px 0 var(--rule-ink);
+}
+
 .time-readout {
   font-family: var(--font-mono);
   font-size: 12.5px;
